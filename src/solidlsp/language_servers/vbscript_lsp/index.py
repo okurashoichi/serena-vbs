@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from solidlsp.language_servers.vbscript_lsp.reference_tracker import ReferenceTracker
+
 if TYPE_CHECKING:
     from lsprotocol import types
 
@@ -59,7 +61,10 @@ class SymbolIndex:
         # Map from lowercase name to list of symbols with that name
         self._symbols_by_name: dict[str, list[IndexedSymbol]] = {}
 
-    def update(self, uri: str, symbols: list[ParsedSymbol]) -> None:
+        # Reference tracker for finding symbol references
+        self._reference_tracker: ReferenceTracker = ReferenceTracker()
+
+    def update(self, uri: str, content: str, symbols: list[ParsedSymbol]) -> None:
         """Update the index with symbols from a document.
 
         This replaces any existing symbols for the given URI.
@@ -67,6 +72,7 @@ class SymbolIndex:
 
         Args:
             uri: Document URI
+            content: Document content (source code)
             symbols: List of parsed symbols from the document
         """
         # Remove existing symbols for this URI first
@@ -85,12 +91,18 @@ class SymbolIndex:
                 self._symbols_by_name[name_lower] = []
             self._symbols_by_name[name_lower].append(symbol)
 
+        # Update reference tracker
+        self._reference_tracker.update(uri, content, symbols)
+
     def remove(self, uri: str) -> None:
         """Remove all symbols for a document from the index.
 
         Args:
             uri: Document URI to remove
         """
+        # Remove from reference tracker first
+        self._reference_tracker.remove(uri)
+
         if uri not in self._symbols_by_uri:
             return
 
@@ -126,16 +138,74 @@ class SymbolIndex:
             return symbols[0]
         return None
 
+    def find_definition_in_scope(
+        self, name: str, scope_uris: list[str]
+    ) -> IndexedSymbol | None:
+        """Find the first definition of a symbol within the specified URIs.
+
+        The search is case-insensitive to match VBScript's behavior.
+        Only searches within the provided URI list.
+
+        Args:
+            name: Symbol name to find
+            scope_uris: List of URIs to search within
+
+        Returns:
+            IndexedSymbol if found in scope, None otherwise
+        """
+        if not scope_uris:
+            return None
+
+        name_lower = name.lower()
+        symbols = self._symbols_by_name.get(name_lower)
+        if not symbols:
+            return None
+
+        # Convert to set for O(1) lookup
+        scope_set = set(scope_uris)
+
+        for symbol in symbols:
+            if symbol.uri in scope_set:
+                return symbol
+
+        return None
+
+    def find_definitions_in_scope(
+        self, name: str, scope_uris: list[str]
+    ) -> list[IndexedSymbol]:
+        """Find all definitions of a symbol within the specified URIs.
+
+        The search is case-insensitive to match VBScript's behavior.
+        Only searches within the provided URI list.
+
+        Args:
+            name: Symbol name to find
+            scope_uris: List of URIs to search within
+
+        Returns:
+            List of IndexedSymbol objects found in scope
+        """
+        if not scope_uris:
+            return []
+
+        name_lower = name.lower()
+        symbols = self._symbols_by_name.get(name_lower)
+        if not symbols:
+            return []
+
+        # Convert to set for O(1) lookup
+        scope_set = set(scope_uris)
+
+        return [symbol for symbol in symbols if symbol.uri in scope_set]
+
     def find_references(
         self, name: str, include_declaration: bool = False
     ) -> list[types.Location]:
         """Find all references to a symbol by name.
 
         The search is case-insensitive to match VBScript's behavior.
-
-        Note: Currently, the index only tracks symbol declarations.
-        Actual reference tracking (calls, usages) would require
-        additional parsing and is not implemented yet.
+        This method now uses the ReferenceTracker to find actual references
+        (calls, usages) in addition to symbol declarations.
 
         Args:
             name: Symbol name to find
@@ -146,28 +216,13 @@ class SymbolIndex:
         """
         from lsprotocol import types
 
-        name_lower = name.lower()
-        symbols = self._symbols_by_name.get(name_lower, [])
+        # Get references from the reference tracker
+        refs = self._reference_tracker.find_references(name, include_declaration)
 
-        if not include_declaration:
-            # Only return actual references, not declarations
-            # Since we only track declarations currently, return empty list
-            return []
-
+        # Convert References to Location objects
         locations: list[types.Location] = []
-        for symbol in symbols:
-            location = types.Location(
-                uri=symbol.uri,
-                range=types.Range(
-                    start=types.Position(
-                        line=symbol.start_line, character=symbol.start_character
-                    ),
-                    end=types.Position(
-                        line=symbol.end_line, character=symbol.end_character
-                    ),
-                ),
-            )
-            locations.append(location)
+        for ref in refs:
+            locations.append(ref.to_location())
 
         return locations
 

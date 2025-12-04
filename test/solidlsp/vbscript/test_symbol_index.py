@@ -47,12 +47,19 @@ class TestSymbolIndexUpdate:
     def test_update_adds_symbols_to_index(self) -> None:
         """Test that update adds symbols to the index."""
         index = SymbolIndex()
+        content = """
+Function GetValue()
+End Function
+
+Function SetValue()
+End Function
+"""
         symbols = [
-            make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 0, 5),
-            make_symbol("SetValue", SYMBOL_KIND_FUNCTION, 7, 12),
+            make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 1, 2),
+            make_symbol("SetValue", SYMBOL_KIND_FUNCTION, 4, 5),
         ]
 
-        index.update("file:///test.vbs", symbols)
+        index.update("file:///test.vbs", content, symbols)
 
         # Should be able to find the symbols
         result = index.get_symbols_in_document("file:///test.vbs")
@@ -65,10 +72,10 @@ class TestSymbolIndexUpdate:
         index = SymbolIndex()
 
         # First update
-        index.update("file:///test.vbs", [make_symbol("OldFunc")])
+        index.update("file:///test.vbs", "Function OldFunc()\nEnd Function", [make_symbol("OldFunc")])
 
         # Second update
-        index.update("file:///test.vbs", [make_symbol("NewFunc")])
+        index.update("file:///test.vbs", "Function NewFunc()\nEnd Function", [make_symbol("NewFunc")])
 
         result = index.get_symbols_in_document("file:///test.vbs")
         assert len(result) == 1
@@ -79,7 +86,7 @@ class TestSymbolIndexUpdate:
         index = SymbolIndex()
         symbols = [make_symbol("GetValue")]
 
-        index.update("file:///test.vbs", symbols)
+        index.update("file:///test.vbs", "Function GetValue()\nEnd Function", symbols)
 
         # Should be able to find by name
         definition = index.find_definition("GetValue")
@@ -89,18 +96,26 @@ class TestSymbolIndexUpdate:
     def test_update_with_class_and_members(self) -> None:
         """Test that class members are indexed."""
         index = SymbolIndex()
+        content = """
+Class MyClass
+    Function GetValue()
+    End Function
+    Property Get Name()
+    End Property
+End Class
+"""
         class_symbol = make_symbol(
             "MyClass",
             SYMBOL_KIND_CLASS,
-            0,
-            20,
+            1,
+            7,
             children=[
-                make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 5, 10),
-                make_symbol("Name", SYMBOL_KIND_PROPERTY, 12, 18),
+                make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 2, 3),
+                make_symbol("Name", SYMBOL_KIND_PROPERTY, 4, 5),
             ],
         )
 
-        index.update("file:///test.vbs", [class_symbol])
+        index.update("file:///test.vbs", content, [class_symbol])
 
         # Should index class and its members
         result = index.get_symbols_in_document("file:///test.vbs")
@@ -117,7 +132,8 @@ class TestSymbolIndexRemove:
     def test_remove_deletes_document_symbols(self) -> None:
         """Test that remove deletes all symbols for a document."""
         index = SymbolIndex()
-        index.update("file:///test.vbs", [make_symbol("Func1"), make_symbol("Func2")])
+        content = "Function Func1()\nEnd Function\nFunction Func2()\nEnd Function"
+        index.update("file:///test.vbs", content, [make_symbol("Func1"), make_symbol("Func2")])
 
         index.remove("file:///test.vbs")
 
@@ -127,7 +143,7 @@ class TestSymbolIndexRemove:
     def test_remove_updates_name_index(self) -> None:
         """Test that remove also cleans up the name index."""
         index = SymbolIndex()
-        index.update("file:///test.vbs", [make_symbol("GetValue")])
+        index.update("file:///test.vbs", "Function GetValue()\nEnd Function", [make_symbol("GetValue")])
 
         index.remove("file:///test.vbs")
 
@@ -150,7 +166,8 @@ class TestSymbolIndexFindDefinition:
         index = SymbolIndex()
         index.update(
             "file:///test.vbs",
-            [make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 5, 10)],
+            "Function GetValue()\nEnd Function",
+            [make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 0, 1)],
         )
 
         result = index.find_definition("GetValue")
@@ -162,7 +179,7 @@ class TestSymbolIndexFindDefinition:
     def test_find_definition_case_insensitive(self) -> None:
         """Test that find_definition is case-insensitive."""
         index = SymbolIndex()
-        index.update("file:///test.vbs", [make_symbol("GetValue")])
+        index.update("file:///test.vbs", "Function GetValue()\nEnd Function", [make_symbol("GetValue")])
 
         # Try different cases
         assert index.find_definition("getvalue") is not None
@@ -172,7 +189,7 @@ class TestSymbolIndexFindDefinition:
     def test_find_definition_not_found(self) -> None:
         """Test that find_definition returns None for missing symbol."""
         index = SymbolIndex()
-        index.update("file:///test.vbs", [make_symbol("GetValue")])
+        index.update("file:///test.vbs", "Function GetValue()\nEnd Function", [make_symbol("GetValue")])
 
         result = index.find_definition("NonExistent")
         assert result is None
@@ -180,8 +197,8 @@ class TestSymbolIndexFindDefinition:
     def test_find_definition_multiple_documents(self) -> None:
         """Test finding definition across multiple documents."""
         index = SymbolIndex()
-        index.update("file:///file1.vbs", [make_symbol("Func1")])
-        index.update("file:///file2.vbs", [make_symbol("Func2")])
+        index.update("file:///file1.vbs", "Function Func1()\nEnd Function", [make_symbol("Func1")])
+        index.update("file:///file2.vbs", "Function Func2()\nEnd Function", [make_symbol("Func2")])
 
         assert index.find_definition("Func1") is not None
         assert index.find_definition("Func2") is not None
@@ -189,8 +206,8 @@ class TestSymbolIndexFindDefinition:
     def test_find_definition_returns_first_match(self) -> None:
         """Test that find_definition returns the first match when there are duplicates."""
         index = SymbolIndex()
-        index.update("file:///file1.vbs", [make_symbol("Helper", start_line=0)])
-        index.update("file:///file2.vbs", [make_symbol("Helper", start_line=10)])
+        index.update("file:///file1.vbs", "Function Helper()\nEnd Function", [make_symbol("Helper", start_line=0)])
+        index.update("file:///file2.vbs", "Function Helper()\nEnd Function", [make_symbol("Helper", start_line=0)])
 
         result = index.find_definition("Helper")
         # Should return one of them (first registered)
@@ -205,56 +222,99 @@ class TestSymbolIndexFindReferences:
     def test_find_references_returns_locations(self) -> None:
         """Test that find_references returns Location objects."""
         index = SymbolIndex()
+        content = """
+Function GetValue()
+    GetValue = 42
+End Function
+"""
         index.update(
             "file:///test.vbs",
-            [make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 5, 10)],
+            content,
+            [make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 1, 3)],
         )
 
         result = index.find_references("GetValue", include_declaration=True)
 
-        assert len(result) == 1
-        assert result[0].uri == "file:///test.vbs"
+        assert len(result) >= 1
+        assert any(loc.uri == "file:///test.vbs" for loc in result)
 
     def test_find_references_case_insensitive(self) -> None:
         """Test that find_references is case-insensitive."""
         index = SymbolIndex()
-        index.update("file:///test.vbs", [make_symbol("GetValue")])
+        content = """
+Function GetValue()
+End Function
 
-        assert len(index.find_references("getvalue", include_declaration=True)) == 1
-        assert len(index.find_references("GETVALUE", include_declaration=True)) == 1
+Sub Main()
+    x = GETVALUE()
+End Sub
+"""
+        index.update(
+            "file:///test.vbs",
+            content,
+            [
+                make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 1, 2),
+                make_symbol("Main", SYMBOL_KIND_FUNCTION, 4, 6),
+            ],
+        )
+
+        assert len(index.find_references("getvalue", include_declaration=True)) >= 1
+        assert len(index.find_references("GETVALUE", include_declaration=True)) >= 1
 
     def test_find_references_across_documents(self) -> None:
         """Test finding references across multiple documents."""
         index = SymbolIndex()
-        # Same function name in different files
-        index.update("file:///file1.vbs", [make_symbol("Helper")])
-        index.update("file:///file2.vbs", [make_symbol("Helper")])
+        content1 = """
+Function Helper()
+End Function
+"""
+        content2 = """
+Sub Main()
+    Helper
+End Sub
+"""
+        index.update("file:///file1.vbs", content1, [make_symbol("Helper", start_line=1, end_line=2)])
+        index.update("file:///file2.vbs", content2, [make_symbol("Main", start_line=1, end_line=3)])
 
         result = index.find_references("Helper", include_declaration=True)
 
-        assert len(result) == 2
+        # Should find at least the definition in file1 and the call in file2
+        assert len(result) >= 2
         uris = [loc.uri for loc in result]
         assert "file:///file1.vbs" in uris
         assert "file:///file2.vbs" in uris
 
     def test_find_references_include_declaration_false(self) -> None:
-        """Test that include_declaration=False excludes the declaration.
-
-        Note: In a real implementation, this would require tracking
-        actual references vs declarations. For now, the index only
-        tracks declarations, so this returns an empty list.
-        """
+        """Test that include_declaration=False excludes the declaration."""
         index = SymbolIndex()
-        index.update("file:///test.vbs", [make_symbol("GetValue")])
+        content = """
+Function GetValue()
+    GetValue = 42
+End Function
 
-        # With include_declaration=False, only actual references are returned
-        # Since we only track declarations, this should be empty
+Sub Main()
+    x = GetValue()
+End Sub
+"""
+        index.update(
+            "file:///test.vbs",
+            content,
+            [
+                make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 1, 3),
+                make_symbol("Main", SYMBOL_KIND_FUNCTION, 5, 7),
+            ],
+        )
+
+        # With include_declaration=False, only actual references are returned (not definitions)
         result = index.find_references("GetValue", include_declaration=False)
-        assert len(result) == 0
+        # Should have at least the call in Main (line 6: x = GetValue())
+        assert len(result) >= 1
 
     def test_find_references_not_found(self) -> None:
         """Test that find_references returns empty list for missing symbol."""
         index = SymbolIndex()
+        content = "Dim x"
+        index.update("file:///test.vbs", content, [])
 
         result = index.find_references("NonExistent", include_declaration=True)
         assert result == []
@@ -267,8 +327,10 @@ class TestSymbolIndexGetSymbolsInDocument:
     def test_get_symbols_returns_all_symbols(self) -> None:
         """Test that get_symbols_in_document returns all symbols."""
         index = SymbolIndex()
+        content = "Function Func1()\nEnd Function\nFunction Func2()\nEnd Function\nFunction Func3()\nEnd Function"
         index.update(
             "file:///test.vbs",
+            content,
             [
                 make_symbol("Func1"),
                 make_symbol("Func2"),
@@ -291,13 +353,23 @@ class TestSymbolIndexGetSymbolsInDocument:
     def test_get_symbols_includes_nested_symbols(self) -> None:
         """Test that nested symbols (class members) are included."""
         index = SymbolIndex()
+        content = """
+Class MyClass
+    Function Method1()
+    End Function
+    Function Method2()
+    End Function
+End Class
+"""
         class_symbol = make_symbol(
             "MyClass",
             SYMBOL_KIND_CLASS,
-            children=[make_symbol("Method1"), make_symbol("Method2")],
+            start_line=1,
+            end_line=7,
+            children=[make_symbol("Method1", start_line=2, end_line=3), make_symbol("Method2", start_line=4, end_line=5)],
         )
 
-        index.update("file:///test.vbs", [class_symbol])
+        index.update("file:///test.vbs", content, [class_symbol])
 
         result = index.get_symbols_in_document("file:///test.vbs")
         names = [s.name for s in result]
@@ -341,3 +413,123 @@ class TestIndexedSymbol:
         )
 
         assert symbol.container_name == "MyClass"
+
+
+@pytest.mark.vbscript
+class TestSymbolIndexFindDefinitionInScope:
+    """Test scoped definition search functionality."""
+
+    def test_find_definition_in_scope_returns_symbol_from_specified_uris(self) -> None:
+        """Test that find_definition_in_scope searches only in specified URIs."""
+        index = SymbolIndex()
+        index.update(
+            "file:///file1.vbs",
+            "Function Helper()\nEnd Function",
+            [make_symbol("Helper", SYMBOL_KIND_FUNCTION, 0, 1)],
+        )
+        index.update(
+            "file:///file2.vbs",
+            "Function Helper()\nEnd Function",
+            [make_symbol("Helper", SYMBOL_KIND_FUNCTION, 0, 1)],
+        )
+        index.update(
+            "file:///file3.vbs",
+            "Function Other()\nEnd Function",
+            [make_symbol("Other", SYMBOL_KIND_FUNCTION, 0, 1)],
+        )
+
+        # Search only in file2 and file3
+        result = index.find_definition_in_scope("Helper", ["file:///file2.vbs", "file:///file3.vbs"])
+
+        assert result is not None
+        assert result.name == "Helper"
+        assert result.uri == "file:///file2.vbs"
+
+    def test_find_definition_in_scope_not_found_in_scope(self) -> None:
+        """Test that find_definition_in_scope returns None if not in scope."""
+        index = SymbolIndex()
+        index.update(
+            "file:///file1.vbs",
+            "Function Helper()\nEnd Function",
+            [make_symbol("Helper", SYMBOL_KIND_FUNCTION, 0, 1)],
+        )
+        index.update(
+            "file:///file2.vbs",
+            "Function Other()\nEnd Function",
+            [make_symbol("Other", SYMBOL_KIND_FUNCTION, 0, 1)],
+        )
+
+        # Search only in file2, which doesn't have Helper
+        result = index.find_definition_in_scope("Helper", ["file:///file2.vbs"])
+
+        assert result is None
+
+    def test_find_definition_in_scope_case_insensitive(self) -> None:
+        """Test that find_definition_in_scope is case-insensitive."""
+        index = SymbolIndex()
+        index.update(
+            "file:///file1.vbs",
+            "Function GetValue()\nEnd Function",
+            [make_symbol("GetValue", SYMBOL_KIND_FUNCTION, 0, 1)],
+        )
+
+        # Try different cases
+        assert index.find_definition_in_scope("getvalue", ["file:///file1.vbs"]) is not None
+        assert index.find_definition_in_scope("GETVALUE", ["file:///file1.vbs"]) is not None
+        assert index.find_definition_in_scope("getValue", ["file:///file1.vbs"]) is not None
+
+    def test_find_definition_in_scope_empty_uri_list(self) -> None:
+        """Test that find_definition_in_scope returns None for empty URI list."""
+        index = SymbolIndex()
+        index.update(
+            "file:///file1.vbs",
+            "Function Helper()\nEnd Function",
+            [make_symbol("Helper", SYMBOL_KIND_FUNCTION, 0, 1)],
+        )
+
+        result = index.find_definition_in_scope("Helper", [])
+
+        assert result is None
+
+    def test_find_definition_in_scope_returns_all_matches(self) -> None:
+        """Test that find_definitions_in_scope returns all matching definitions."""
+        index = SymbolIndex()
+        index.update(
+            "file:///file1.vbs",
+            "Function Helper()\nEnd Function",
+            [make_symbol("Helper", SYMBOL_KIND_FUNCTION, 0, 1)],
+        )
+        index.update(
+            "file:///file2.vbs",
+            "Function Helper()\nEnd Function",
+            [make_symbol("Helper", SYMBOL_KIND_FUNCTION, 5, 6)],
+        )
+        index.update(
+            "file:///file3.vbs",
+            "Function Other()\nEnd Function",
+            [make_symbol("Other", SYMBOL_KIND_FUNCTION, 0, 1)],
+        )
+
+        # Search all files
+        result = index.find_definitions_in_scope(
+            "Helper",
+            ["file:///file1.vbs", "file:///file2.vbs", "file:///file3.vbs"]
+        )
+
+        assert len(result) == 2
+        uris = [s.uri for s in result]
+        assert "file:///file1.vbs" in uris
+        assert "file:///file2.vbs" in uris
+
+    def test_find_definitions_in_scope_empty_when_not_found(self) -> None:
+        """Test that find_definitions_in_scope returns empty list when not found."""
+        index = SymbolIndex()
+        index.update(
+            "file:///file1.vbs",
+            "Function Other()\nEnd Function",
+            [make_symbol("Other", SYMBOL_KIND_FUNCTION, 0, 1)],
+        )
+
+        result = index.find_definitions_in_scope("Helper", ["file:///file1.vbs"])
+
+        assert result == []

@@ -14,6 +14,10 @@ from typing import TYPE_CHECKING
 from lsprotocol import types
 from pygls.lsp.server import LanguageServer
 
+from solidlsp.language_servers.vbscript_lsp.include_directive_parser import (
+    IncludeDirectiveParser,
+)
+from solidlsp.language_servers.vbscript_lsp.include_graph import IncludeGraph
 from solidlsp.language_servers.vbscript_lsp.index import SymbolIndex
 from solidlsp.language_servers.vbscript_lsp.parser import VBScriptParser
 
@@ -65,12 +69,20 @@ class VBScriptLanguageServer:
     functionality including symbol parsing, indexing, and LSP feature handlers.
     """
 
-    def __init__(self) -> None:
-        """Initialize the VBScript Language Server."""
+    def __init__(self, workspace_root: str | None = None) -> None:
+        """Initialize the VBScript Language Server.
+
+        Args:
+            workspace_root: The root directory of the workspace (for virtual path resolution)
+        """
         self.lsp = LanguageServer(name="vbscript-lsp", version="1.0.0")
         self._parser = VBScriptParser()
         self._index = SymbolIndex()
         self._documents: dict[str, str] = {}
+
+        # Include tracking
+        self._include_graph = IncludeGraph()
+        self._include_parser = IncludeDirectiveParser(workspace_root=workspace_root)
 
         # Register LSP feature handlers
         self._register_handlers()
@@ -130,6 +142,7 @@ class VBScriptLanguageServer:
         """
         self._documents[uri] = content
         self._update_index(uri, content)
+        self._update_includes(uri, content)
 
     def _change_document(self, uri: str, content: str) -> None:
         """Process a document change.
@@ -140,6 +153,7 @@ class VBScriptLanguageServer:
         """
         self._documents[uri] = content
         self._update_index(uri, content)
+        self._update_includes(uri, content)
 
     def _close_document(self, uri: str) -> None:
         """Process a closed document.
@@ -150,6 +164,7 @@ class VBScriptLanguageServer:
         if uri in self._documents:
             del self._documents[uri]
         self._index.remove(uri)
+        self._include_graph.remove(uri)
 
     def _update_index(self, uri: str, content: str) -> None:
         """Parse document and update the symbol index.
@@ -160,14 +175,35 @@ class VBScriptLanguageServer:
         """
         try:
             symbols = self._parser.parse(content, uri)
-            self._index.update(uri, symbols)
+            self._index.update(uri, content, symbols)
+            logger.debug(f"Updated index for {uri}: {len(symbols)} symbols")
         except Exception as e:
             logger.warning(f"Failed to parse document {uri}: {e}")
+
+    def _update_includes(self, uri: str, content: str) -> None:
+        """Extract include directives and update the include graph.
+
+        Args:
+            uri: Document URI
+            content: Document content
+        """
+        try:
+            directives = self._include_parser.extract_includes(content, uri)
+            affected = self._include_graph.update(uri, directives)
+            logger.debug(
+                f"Updated includes for {uri}: {len(directives)} directives, "
+                f"{len(affected)} affected files"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to extract includes from {uri}: {e}")
 
     def document_symbol(
         self, params: types.DocumentSymbolParams
     ) -> list[types.DocumentSymbol] | None:
         """Return document symbols for the given document.
+
+        Includes both VBScript symbols (functions, subs, classes) and
+        include directives (as File symbols).
 
         Args:
             params: Document symbol request parameters
@@ -181,19 +217,75 @@ class VBScriptLanguageServer:
         if content is None:
             return None
 
+        result: list[types.DocumentSymbol] = []
+
+        # Add include directives as File symbols
+        include_symbols = self._get_include_symbols(uri)
+        result.extend(include_symbols)
+
+        # Add VBScript symbols
         symbols = self._parser.parse(content, uri)
-        return [s.to_document_symbol() for s in symbols]
+        result.extend(s.to_document_symbol() for s in symbols)
+
+        return result
+
+    def _get_include_symbols(self, uri: str) -> list[types.DocumentSymbol]:
+        """Get include directives as DocumentSymbol objects.
+
+        Args:
+            uri: Document URI
+
+        Returns:
+            List of DocumentSymbol objects for include directives
+        """
+        directives = self._include_graph.get_include_directives(uri)
+        result: list[types.DocumentSymbol] = []
+
+        for directive in directives:
+            # Build symbol name with error marker if invalid
+            if directive.is_valid:
+                name = directive.raw_path
+            else:
+                name = f"[!] {directive.raw_path}"
+
+            # Create range from directive position
+            symbol_range = types.Range(
+                start=types.Position(
+                    line=directive.line,
+                    character=directive.character,
+                ),
+                end=types.Position(
+                    line=directive.end_line,
+                    character=directive.end_character,
+                ),
+            )
+
+            symbol = types.DocumentSymbol(
+                name=name,
+                kind=types.SymbolKind.File,
+                range=symbol_range,
+                selection_range=symbol_range,
+                detail=f"#include {directive.include_type}",
+            )
+            result.append(symbol)
+
+        return result
 
     def goto_definition(
         self, params: types.DefinitionParams
     ) -> types.Location | list[types.Location] | None:
         """Find the definition of the symbol at the given position.
 
+        Searches in the following order:
+        1. Local file (current document)
+        2. Transitively included files
+
         Args:
             params: Definition request parameters
 
         Returns:
-            Location of the definition, or None if not found
+            Location of the definition, list of Locations if multiple found,
+            or None if not found
         """
         uri = params.text_document.uri
         content = self._documents.get(uri)
@@ -206,24 +298,50 @@ class VBScriptLanguageServer:
         if word is None:
             return None
 
-        # Find definition in index
-        definition = self._index.find_definition(word)
-        if definition is None:
-            return None
+        # First, check if symbol is defined in the local file
+        local_definition = self._index.find_definition_in_scope(word, [uri])
+        if local_definition is not None:
+            return types.Location(
+                uri=local_definition.uri,
+                range=types.Range(
+                    start=types.Position(
+                        line=local_definition.start_line,
+                        character=local_definition.start_character,
+                    ),
+                    end=types.Position(
+                        line=local_definition.end_line,
+                        character=local_definition.end_character,
+                    ),
+                ),
+            )
 
-        return types.Location(
-            uri=definition.uri,
-            range=types.Range(
-                start=types.Position(
-                    line=definition.start_line,
-                    character=definition.start_character,
-                ),
-                end=types.Position(
-                    line=definition.end_line,
-                    character=definition.end_character,
-                ),
-            ),
-        )
+        # If not found locally, search in included files
+        included_uris = self._include_graph.get_transitive_includes(uri)
+        if included_uris:
+            definitions = self._index.find_definitions_in_scope(word, included_uris)
+            if definitions:
+                locations = [
+                    types.Location(
+                        uri=defn.uri,
+                        range=types.Range(
+                            start=types.Position(
+                                line=defn.start_line,
+                                character=defn.start_character,
+                            ),
+                            end=types.Position(
+                                line=defn.end_line,
+                                character=defn.end_character,
+                            ),
+                        ),
+                    )
+                    for defn in definitions
+                ]
+                # Return single Location or list based on count
+                if len(locations) == 1:
+                    return locations[0]
+                return locations
+
+        return None
 
     def find_references(
         self, params: types.ReferenceParams

@@ -291,7 +291,7 @@ End Function
         self, lsp_server: VBScriptLanguageServer
     ) -> None:
         """Test find references across multiple documents."""
-        # Open first document
+        # Open first document with function definition
         content1 = """Function Helper()
     Helper = 1
 End Function
@@ -299,10 +299,10 @@ End Function
         uri1 = "file:///file1.vbs"
         lsp_server._open_document(uri1, content1)
 
-        # Open second document with same function name
-        content2 = """Function Helper()
-    Helper = 2
-End Function
+        # Open second document that calls the function
+        content2 = """Sub Main()
+    x = Helper()
+End Sub
 """
         uri2 = "file:///file2.vbs"
         lsp_server._open_document(uri2, content2)
@@ -316,10 +316,150 @@ End Function
 
         # Should find references in both documents
         assert result is not None
-        assert len(result) == 2
+        assert len(result) >= 2
         uris = [loc.uri for loc in result]
         assert uri1 in uris
         assert uri2 in uris
+
+    def test_find_references_without_declaration(
+        self, lsp_server: VBScriptLanguageServer
+    ) -> None:
+        """Test find references excluding declaration."""
+        content = """Function GetValue()
+    GetValue = 42
+End Function
+
+Sub Main()
+    x = GetValue()
+    y = GetValue()
+End Sub
+"""
+        uri = "file:///test.vbs"
+        lsp_server._open_document(uri, content)
+
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=10),
+            context=types.ReferenceContext(include_declaration=False),
+        )
+        result = lsp_server.find_references(params)
+
+        # Should find references but not the definition
+        assert result is not None
+        # Should have at least the calls (line 5, 6)
+        assert len(result) >= 1
+        # None of the results should be on the definition line
+        for loc in result:
+            # Definition is on line 0
+            assert not (loc.range.start.line == 0 and loc.range.start.character < 15)
+
+    def test_find_references_case_insensitive(
+        self, lsp_server: VBScriptLanguageServer
+    ) -> None:
+        """Test that find references is case-insensitive."""
+        content = """Function MyFunc()
+End Function
+
+Sub Main()
+    MyFunc
+    MYFUNC
+    myfunc
+End Sub
+"""
+        uri = "file:///test.vbs"
+        lsp_server._open_document(uri, content)
+
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=10),
+            context=types.ReferenceContext(include_declaration=True),
+        )
+        result = lsp_server.find_references(params)
+
+        # Should find all case variations
+        assert result is not None
+        assert len(result) >= 4  # definition + 3 calls
+
+    def test_find_references_excludes_comments(
+        self, lsp_server: VBScriptLanguageServer
+    ) -> None:
+        """Test that references in comments are excluded."""
+        content = """Function GetValue()
+End Function
+
+Sub Main()
+    ' GetValue is a helper function
+    x = GetValue()
+End Sub
+"""
+        uri = "file:///test.vbs"
+        lsp_server._open_document(uri, content)
+
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=10),
+            context=types.ReferenceContext(include_declaration=True),
+        )
+        result = lsp_server.find_references(params)
+
+        # Should NOT include the commented reference (line 4)
+        assert result is not None
+        for loc in result:
+            if loc.range.start.line == 4:
+                # Line 4 is the comment line
+                pytest.fail("Found reference in comment")
+
+    def test_find_references_excludes_strings(
+        self, lsp_server: VBScriptLanguageServer
+    ) -> None:
+        """Test that references in string literals are excluded."""
+        content = """Function GetValue()
+End Function
+
+Sub Main()
+    msg = "Call GetValue to get data"
+    x = GetValue()
+End Sub
+"""
+        uri = "file:///test.vbs"
+        lsp_server._open_document(uri, content)
+
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=10),
+            context=types.ReferenceContext(include_declaration=True),
+        )
+        result = lsp_server.find_references(params)
+
+        # Should NOT include the string literal reference
+        assert result is not None
+        for loc in result:
+            if loc.range.start.line == 4:
+                # Check if it's inside the string
+                if loc.range.start.character > 10:  # After 'msg = "'
+                    pytest.fail("Found reference in string literal")
+
+    def test_find_references_not_found(
+        self, lsp_server: VBScriptLanguageServer
+    ) -> None:
+        """Test that find references returns empty list for unknown symbol."""
+        content = """Sub Main()
+    x = 1
+End Sub
+"""
+        uri = "file:///test.vbs"
+        lsp_server._open_document(uri, content)
+
+        # Position cursor on whitespace where no word exists
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=30),  # Beyond end of line
+            context=types.ReferenceContext(include_declaration=True),
+        )
+        result = lsp_server.find_references(params)
+
+        # No word at position, so result should be None
+        assert result is None
 
 
 class TestSerenaIntegration:
