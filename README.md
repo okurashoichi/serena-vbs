@@ -3,6 +3,25 @@
   <img src="resources/serena-logo-dark-mode.svg#gh-dark-mode-only" style="width:500px">
 </p>
 
+# serena-vbs
+
+> **VBScript/ASP対応を追加した [Serena](https://github.com/oraios/serena) のフォーク版**
+
+このリポジトリは、オリジナルの [Serena](https://github.com/oraios/serena) に **VBScript/ASP言語サポート**を追加したフォーク版です。
+Classic ASPやVBScriptで書かれたレガシーコードベースを扱う開発者向けに、Serenaのセマンティックコード分析機能を拡張しています。
+
+## 追加機能
+
+- **VBScript/ASP言語サーバー対応**: VBS/ASPファイルのシンボル解析、定義ジャンプ、参照検索
+- オリジナルSerenaの全機能を継承
+
+> [!NOTE]
+> オリジナルSerenaの詳細なドキュメントは [Serena公式サイト](https://oraios.github.io/serena/) を参照してください。
+
+---
+
+## About Serena
+
 * :rocket: Serena is a powerful **coding agent toolkit** capable of turning an LLM into a fully-featured agent that works **directly on your codebase**.
   Unlike most other tools, it is not tied to an LLM, framework or an interface, making it easy to use it in a variety of ways.
 * :wrench: Serena provides essential **semantic code retrieval and editing tools** that are akin to an IDE's capabilities, extracting code entities at the symbol level and exploiting relational structure. When combined with an existing coding agent, these tools greatly enhance (token) efficiency.
@@ -73,27 +92,64 @@ AL, Bash, C#, C/C++, Clojure, Dart, Elixir, Elm, Erlang, Fortran, Go, Haskell, J
 > [!IMPORTANT]
 > Some languages require additional dependencies to be installed; see the [Language Support](https://oraios.github.io/serena/01-about/020_programming-languages.html) page for details.
 
-## Quick Start
+## Quick Start (serena-vbs)
 
-**Prerequisites**. Serena is managed by *uv*. If you don’t already have it, you need to [install uv](https://docs.astral.sh/uv/getting-started/installation/) before proceeding.
+**Prerequisites**. serena-vbs は *uv* で管理されています。まだインストールしていない場合は、[uvをインストール](https://docs.astral.sh/uv/getting-started/installation/)してください。
 
-**Starting the MCP Server**. The easiest way to start the Serena MCP server is by running the latest version from GitHub using uvx.
-Issue this command to see available options:
+### インストール・実行
+
+serena-vbs は GitHub から直接実行できます：
 
 ```bash
-uvx --from git+https://github.com/oraios/serena serena start-mcp-server --help
+# ヘルプを表示
+uvx --from git+https://github.com/okurashoichi/serena-vbs serena start-mcp-server --help
+
+# MCPサーバーを起動（プロジェクトパスを指定）
+uvx --from git+https://github.com/okurashoichi/serena-vbs serena start-mcp-server /path/to/your/project
 ```
 
-**Configuring Your Client**. To connect Serena to your preferred MCP client, you typically need to [configure a launch command in your client](https://oraios.github.io/serena/02-usage/030_clients.html).
-Follow the link for specific instructions on how to set up Serena for Claude Code, Codex, Claude Desktop, MCP-enabled IDEs and other clients (such as local and web-based GUIs). 
+### Claude Code 設定
+
+`~/.claude/claude_code_config.json` に以下を追加：
+
+```json
+{
+  "mcpServers": {
+    "serena-vbs": {
+      "command": "uvx",
+      "args": [
+        "--from", "git+https://github.com/okurashoichi/serena-vbs",
+        "serena", "start-mcp-server", "/path/to/your/project"
+      ]
+    }
+  }
+}
+```
+
+### Claude Desktop 設定
+
+`claude_desktop_config.json` に以下を追加：
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "serena-vbs": {
+      "command": "uvx",
+      "args": [
+        "--from", "git+https://github.com/okurashoichi/serena-vbs",
+        "serena", "start-mcp-server", "/path/to/your/project"
+      ]
+    }
+  }
+}
+```
 
 > [!TIP]
-> While getting started quickly is easy, Serena is a powerful toolkit with many configuration options.
-> We highly recommend reading through the [user guide](https://oraios.github.io/serena/02-usage/000_intro.html) to get the most out of Serena.
-> 
-> Specifically, we recommend to read about ...
->   * [Serena's project-based workflow](https://oraios.github.io/serena/02-usage/040_workflow.html) and
->   * [configuring Serena](https://oraios.github.io/serena/02-usage/050_configuration.html).
+> `/path/to/your/project` を実際のプロジェクトパスに置き換えてください。
+> 詳細な設定オプションは [Serena公式ドキュメント](https://oraios.github.io/serena/02-usage/030_clients.html) を参照してください。
 
 ## User Guide
 
