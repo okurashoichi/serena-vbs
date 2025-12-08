@@ -533,3 +533,48 @@ class TestSymbolIndexFindDefinitionInScope:
         result = index.find_definitions_in_scope("Helper", ["file:///file1.vbs"])
 
         assert result == []
+
+
+@pytest.mark.vbscript
+class TestSymbolIndexDocumentContent:
+    """Test document content storage functionality."""
+
+    def test_documents_content_attribute_exists(self) -> None:
+        """Test that SymbolIndex has _documents_content attribute."""
+        index = SymbolIndex()
+        assert hasattr(index, "_documents_content")
+        assert isinstance(index._documents_content, dict)
+
+    def test_documents_content_starts_empty(self) -> None:
+        """Test that _documents_content starts as an empty dict."""
+        index = SymbolIndex()
+        assert index._documents_content == {}
+
+    def test_get_document_content_returns_content_for_indexed_uri(self) -> None:
+        """Test that get_document_content returns content for indexed URI."""
+        index = SymbolIndex()
+        content = "Function GetValue()\nEnd Function"
+        index.update("file:///test.vbs", content, [make_symbol("GetValue")])
+
+        result = index.get_document_content("file:///test.vbs")
+
+        assert result == content
+
+    def test_get_document_content_returns_none_for_unknown_uri(self) -> None:
+        """Test that get_document_content returns None for unknown URI."""
+        index = SymbolIndex()
+
+        result = index.get_document_content("file:///unknown.vbs")
+
+        assert result is None
+
+    def test_get_document_content_returns_none_after_remove(self) -> None:
+        """Test that get_document_content returns None after document is removed."""
+        index = SymbolIndex()
+        content = "Function GetValue()\nEnd Function"
+        index.update("file:///test.vbs", content, [make_symbol("GetValue")])
+
+        index.remove("file:///test.vbs")
+
+        result = index.get_document_content("file:///test.vbs")
+        assert result is None

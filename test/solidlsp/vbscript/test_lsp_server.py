@@ -665,6 +665,168 @@ End Sub
         uris = [loc.uri for loc in result]
         assert main_uri in uris  # Call in main.asp
 
+    def test_find_references_uses_index_content_not_documents_cache(self) -> None:
+        """Test that find_references uses index content, not _documents cache."""
+        server = VBScriptLanguageServer()
+
+        content = """Function Helper()
+    Helper = 1
+End Function
+
+Sub Main()
+    Helper
+End Sub
+"""
+        uri = "file:///test.vbs"
+        server._open_document(uri, content)
+
+        # Manually remove from _documents cache but keep in index
+        # This simulates the case where index has content but document is not "open"
+        del server._documents[uri]
+
+        # find_references should still work using index content
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=10),
+            context=types.ReferenceContext(include_declaration=True),
+        )
+        result = server.find_references(params)
+
+        # Should find references because we use index content
+        assert result is not None
+        assert len(result) >= 1
+
+    def test_find_references_returns_none_for_unindexed_uri(self) -> None:
+        """Test that find_references returns None for URI not in index."""
+        server = VBScriptLanguageServer()
+
+        # URI that was never opened/indexed
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri="file:///nonexistent.vbs"),
+            position=types.Position(line=0, character=0),
+            context=types.ReferenceContext(include_declaration=True),
+        )
+        result = server.find_references(params)
+
+        assert result is None
+
+    def test_find_references_case_insensitive(self) -> None:
+        """Test that find_references is case-insensitive (VBScript behavior)."""
+        server = VBScriptLanguageServer()
+
+        content = """Function GetValue()
+    GetValue = 42
+End Function
+
+Sub Main()
+    x = GETVALUE()
+    y = getvalue()
+End Sub
+"""
+        uri = "file:///test.vbs"
+        server._open_document(uri, content)
+
+        # Search with different case
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=10),  # Position on "GetValue"
+            context=types.ReferenceContext(include_declaration=True),
+        )
+        result = server.find_references(params)
+
+        assert result is not None
+        # Should find all references regardless of case
+        assert len(result) >= 3  # Definition + 2 calls
+
+    def test_find_references_returns_empty_list_for_unknown_symbol(self) -> None:
+        """Test that find_references returns empty list for symbol with no references."""
+        server = VBScriptLanguageServer()
+
+        content = """Function GetValue()
+    GetValue = 42
+End Function
+"""
+        uri = "file:///test.vbs"
+        server._open_document(uri, content)
+
+        # Find references for a symbol that exists but has no other references
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=10),
+            context=types.ReferenceContext(include_declaration=False),
+        )
+        result = server.find_references(params)
+
+        # Should return list (may be empty or have self-reference)
+        assert result is not None
+        assert isinstance(result, list)
+
+    def test_find_references_no_duplicates(self) -> None:
+        """Test that find_references does not return duplicate references."""
+        server = VBScriptLanguageServer()
+
+        content = """Function Helper()
+    Helper = 1
+End Function
+
+Sub Main()
+    Helper
+End Sub
+"""
+        uri = "file:///test.vbs"
+        server._open_document(uri, content)
+
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=10),
+            context=types.ReferenceContext(include_declaration=True),
+        )
+        result = server.find_references(params)
+
+        assert result is not None
+        # Check for duplicates by comparing (uri, line, character) tuples
+        locations = [(loc.uri, loc.range.start.line, loc.range.start.character) for loc in result]
+        assert len(locations) == len(set(locations)), "Duplicate references found"
+
+    def test_find_references_with_circular_includes(self) -> None:
+        """Test that find_references handles circular includes without infinite loop."""
+        server = VBScriptLanguageServer()
+
+        # Create circular include: a.asp -> b.asp -> a.asp
+        a_content = '''<!--#include file="b.asp"-->
+<%
+Function SharedFunc()
+    SharedFunc = 1
+End Function
+%>'''
+        a_uri = "file:///project/a.asp"
+
+        b_content = '''<!--#include file="a.asp"-->
+<%
+Sub UseShared()
+    SharedFunc
+End Sub
+%>'''
+        b_uri = "file:///project/b.asp"
+
+        # Open both files
+        server._open_document(a_uri, a_content)
+        server._open_document(b_uri, b_content)
+
+        # Find references should work without hanging
+        params = types.ReferenceParams(
+            text_document=types.TextDocumentIdentifier(uri=a_uri),
+            position=types.Position(line=2, character=10),  # Position on SharedFunc
+            context=types.ReferenceContext(include_declaration=True),
+        )
+        result = server.find_references(params)
+
+        # Should return results without infinite loop
+        assert result is not None
+        uris = [loc.uri for loc in result]
+        assert a_uri in uris
+        assert b_uri in uris
+
 
 @pytest.mark.vbscript
 class TestDocumentLifecycle:

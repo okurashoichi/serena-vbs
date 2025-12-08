@@ -64,6 +64,9 @@ class SymbolIndex:
         # Reference tracker for finding symbol references
         self._reference_tracker: ReferenceTracker = ReferenceTracker()
 
+        # Map from URI to document content (for cross-file reference search)
+        self._documents_content: dict[str, str] = {}
+
     def update(self, uri: str, content: str, symbols: list[ParsedSymbol]) -> None:
         """Update the index with symbols from a document.
 
@@ -94,6 +97,9 @@ class SymbolIndex:
         # Update reference tracker
         self._reference_tracker.update(uri, content, symbols)
 
+        # Store document content for cross-file reference search
+        self._documents_content[uri] = content
+
     def remove(self, uri: str) -> None:
         """Remove all symbols for a document from the index.
 
@@ -102,6 +108,10 @@ class SymbolIndex:
         """
         # Remove from reference tracker first
         self._reference_tracker.remove(uri)
+
+        # Remove document content
+        if uri in self._documents_content:
+            del self._documents_content[uri]
 
         if uri not in self._symbols_by_uri:
             return
@@ -236,6 +246,17 @@ class SymbolIndex:
             List of IndexedSymbol objects (empty list if document not found)
         """
         return self._symbols_by_uri.get(uri, [])
+
+    def get_document_content(self, uri: str) -> str | None:
+        """Get the content of an indexed document.
+
+        Args:
+            uri: Document URI
+
+        Returns:
+            Document content if indexed, None otherwise
+        """
+        return self._documents_content.get(uri)
 
     def _flatten_symbols(
         self,

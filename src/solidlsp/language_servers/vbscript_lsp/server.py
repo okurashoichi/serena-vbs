@@ -8,7 +8,9 @@ and find-references functionality.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import threading
 from typing import TYPE_CHECKING
 
 from lsprotocol import types
@@ -29,6 +31,12 @@ logger = logging.getLogger(__name__)
 
 # Word pattern for VBScript identifiers
 WORD_PATTERN = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+
+# VBScript file extensions for workspace scanning
+VBSCRIPT_EXTENSIONS: frozenset[str] = frozenset({".vbs", ".asp", ".inc"})
+
+# Directories to skip during workspace scanning
+IGNORED_DIRS: frozenset[str] = frozenset({".git", "node_modules", "Backup", "bin", "obj"})
 
 
 def get_word_at_position(content: str, position: types.Position) -> str | None:
@@ -79,16 +87,63 @@ class VBScriptLanguageServer:
         self._parser = VBScriptParser()
         self._index = SymbolIndex()
         self._documents: dict[str, str] = {}
+        self._workspace_root = workspace_root
 
         # Include tracking
         self._include_graph = IncludeGraph()
         self._include_parser = IncludeDirectiveParser(workspace_root=workspace_root)
 
+        # Completion notification event (Pyright pattern)
+        self.analysis_complete = threading.Event()
+
         # Register LSP feature handlers
         self._register_handlers()
 
+        # Perform initial workspace scan if workspace_root is provided at construction time
+        # (primarily for testing; in production, scan happens in initialize handler)
+        if workspace_root:
+            self._scan_workspace(workspace_root)
+            self.analysis_complete.set()
+
     def _register_handlers(self) -> None:
         """Register LSP protocol handlers."""
+
+        @self.lsp.feature(types.INITIALIZE)
+        def initialize(params: types.InitializeParams) -> types.InitializeResult:
+            """Handle LSP initialize request and perform workspace scan."""
+            # Extract workspace root from initialize params
+            workspace_root = None
+            if params.root_uri:
+                # Convert file:// URI to path
+                if params.root_uri.startswith("file://"):
+                    workspace_root = params.root_uri[7:]  # Remove "file://" prefix
+            elif params.root_path:
+                workspace_root = params.root_path
+
+            # Update workspace root and include parser
+            if workspace_root:
+                self._workspace_root = workspace_root
+                self._include_parser = IncludeDirectiveParser(workspace_root=workspace_root)
+
+                # Perform workspace scan
+                logger.info(f"Scanning workspace: {workspace_root}")
+                file_count = self._scan_workspace(workspace_root)
+                logger.info(f"Workspace scan complete: {file_count} files indexed")
+
+            self.analysis_complete.set()
+
+            # Return server capabilities
+            return types.InitializeResult(
+                capabilities=types.ServerCapabilities(
+                    text_document_sync=types.TextDocumentSyncOptions(
+                        open_close=True,
+                        change=types.TextDocumentSyncKind.Full,
+                    ),
+                    document_symbol_provider=True,
+                    definition_provider=True,
+                    references_provider=True,
+                )
+            )
 
         @self.lsp.feature(types.TEXT_DOCUMENT_DID_OPEN)
         def did_open(params: types.DidOpenTextDocumentParams) -> None:
@@ -348,30 +403,140 @@ class VBScriptLanguageServer:
     ) -> list[types.Location] | None:
         """Find all references to the symbol at the given position.
 
+        This method searches across all indexed files, not just open documents.
+
         Args:
             params: Reference request parameters
 
         Returns:
-            List of Location objects for each reference
+            List of Location objects for each reference, or None if symbol not found
         """
-        uri = params.text_document.uri
-        content = self._documents.get(uri)
+        try:
+            uri = params.text_document.uri
 
-        if content is None:
+            # Get content from index (supports cross-file reference search)
+            content = self._index.get_document_content(uri)
+
+            if content is None:
+                logger.debug("find_references: URI not indexed: %s", uri)
+                return None
+
+            # Get the word at cursor position
+            word = get_word_at_position(content, params.position)
+            if word is None:
+                logger.debug(
+                    "find_references: No symbol at position %d:%d in %s",
+                    params.position.line,
+                    params.position.character,
+                    uri,
+                )
+                return None
+
+            # Find references in index
+            include_declaration = params.context.include_declaration
+            return self._index.find_references(word, include_declaration)
+        except Exception:
+            logger.exception("find_references: Unexpected error")
             return None
-
-        # Get the word at cursor position
-        word = get_word_at_position(content, params.position)
-        if word is None:
-            return None
-
-        # Find references in index
-        include_declaration = params.context.include_declaration
-        return self._index.find_references(word, include_declaration)
 
     def start_io(self) -> None:
         """Start the server in STDIO mode."""
         self.lsp.start_io()
+
+    def _is_target_file(self, filename: str) -> bool:
+        """Check if a file is a VBScript-related target file.
+
+        Args:
+            filename: The filename to check
+
+        Returns:
+            True if the file has a VBScript-related extension (.vbs, .asp, .inc)
+        """
+        # Get the extension and convert to lowercase for case-insensitive matching
+        _, ext = os.path.splitext(filename)
+        return ext.lower() in VBSCRIPT_EXTENSIONS
+
+    def _should_skip_directory(self, dirname: str) -> bool:
+        """Check if a directory should be skipped during workspace scanning.
+
+        Args:
+            dirname: The directory name to check
+
+        Returns:
+            True if the directory should be skipped
+        """
+        # Skip hidden directories (starting with .)
+        if dirname.startswith("."):
+            return True
+        # Skip known excluded directories
+        return dirname in IGNORED_DIRS
+
+    def _read_file_content(self, file_path: str) -> str | None:
+        """Read file content with UTF-8 encoding.
+
+        Args:
+            file_path: The path to the file to read
+
+        Returns:
+            File content as string, or None if reading failed
+        """
+        try:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except FileNotFoundError:
+            logger.warning(f"File not found: {file_path}")
+            return None
+        except PermissionError:
+            logger.warning(f"Permission denied: {file_path}")
+            return None
+        except OSError as e:
+            logger.warning(f"Failed to read file {file_path}: {e}")
+            return None
+
+    def _scan_workspace(self, root_path: str) -> int:
+        """Scan workspace for VBScript files and index their symbols.
+
+        Args:
+            root_path: The root directory to scan
+
+        Returns:
+            Number of files scanned and indexed
+        """
+        if not os.path.isdir(root_path):
+            logger.warning(f"Workspace root is not a directory: {root_path}")
+            return 0
+
+        file_count = 0
+
+        for dirpath, dirnames, filenames in os.walk(root_path):
+            # Filter out directories to skip (modifies in place for os.walk)
+            dirnames[:] = [d for d in dirnames if not self._should_skip_directory(d)]
+
+            for filename in filenames:
+                if not self._is_target_file(filename):
+                    continue
+
+                file_path = os.path.join(dirpath, filename)
+                content = self._read_file_content(file_path)
+
+                if content is None:
+                    continue
+
+                # Convert file path to URI and register with index
+                uri = f"file://{file_path}"
+                self._open_document(uri, content)
+                file_count += 1
+                logger.debug(f"Scanned: {file_path}")
+
+        logger.info(f"Found {file_count} source files")
+
+        if file_count > 1000:
+            logger.warning(
+                f"Large project detected: {file_count} files. "
+                "Consider using a more targeted workspace."
+            )
+
+        return file_count
 
 
 def main() -> None:
