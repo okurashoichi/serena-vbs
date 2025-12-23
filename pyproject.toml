@@ -35,6 +35,8 @@ dependencies = [
   "tqdm>=4.67.1",
   "tiktoken>=0.9.0",
   "anthropic>=0.54.0",
+  "pygls>=2.0.0",
+  "lsprotocol>=2024.0.0",
 ]
 
 [[tool.uv.index]]
@@ -299,6 +301,7 @@ markers = [
   "fortran: language server running for Fortran",
   "haskell: Haskell language server tests",
   "yaml: language server running for YAML",
+  "vbscript: language server running for VBScript/ASP",
 ]
 
 [tool.codespell]

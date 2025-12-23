@@ -25,8 +25,8 @@ INTERNAL_MODE_YAMLS_DIR = str(_serena_pkg_path / "resources" / "config" / "inter
 SERENA_DASHBOARD_DIR = str(_serena_pkg_path / "resources" / "dashboard")
 SERENA_ICON_DIR = str(_serena_pkg_path / "resources" / "icons")
 
-DEFAULT_SOURCE_FILE_ENCODING = "utf-8"
-"""The default encoding assumed for project source files."""
+DEFAULT_SOURCE_FILE_ENCODING = "shift_jis"
+"""The default encoding assumed for project source files. Set to shift_jis for VBScript/ASP projects (Japanese Windows)."""
 DEFAULT_CONTEXT = "desktop-app"
 DEFAULT_MODES = ("interactive", "editing")
 

@@ -60,6 +60,7 @@ class Language(str, Enum):
     JULIA = "julia"
     FORTRAN = "fortran"
     HASKELL = "haskell"
+    VBSCRIPT = "vbscript"
     # Experimental or deprecated Language Servers
     TYPESCRIPT_VTS = "typescript_vts"
     """Use the typescript language server through the natively bundled vscode extension via https://github.com/yioneko/vtsls"""
@@ -172,6 +173,8 @@ class Language(str, Enum):
                 )
             case self.HASKELL:
                 return FilenameMatcher("*.hs", "*.lhs")
+            case self.VBSCRIPT:
+                return FilenameMatcher("*.vbs", "*.VBS", "*.asp", "*.ASP", "*.inc", "*.INC")
             case _:
                 raise ValueError(f"Unhandled language: {self}")
 
@@ -317,6 +320,10 @@ class Language(str, Enum):
                 from solidlsp.language_servers.haskell_language_server import HaskellLanguageServer
 
                 return HaskellLanguageServer
+            case self.VBSCRIPT:
+                from solidlsp.language_servers.vbscript_language_server import VBScriptLanguageServer
+
+                return VBScriptLanguageServer
             case _:
                 raise ValueError(f"Unhandled language: {self}")
 
